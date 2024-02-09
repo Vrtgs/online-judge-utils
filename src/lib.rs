@@ -199,6 +199,15 @@ macro_rules! read {
         assert_eq!(n, cnt, "not enough elements to read");
         collection
     }};
+    [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {{
+        let n = {$n} as usize;
+        let mut cnt = 0;
+        let collection = $crate::with_token_reader(|r| {
+            r.by_ref().take(n).map(|x| $crate::parse!(x, $t)).map($map).inspect(|_| cnt += 1).collect::<$container<$t>>()
+        });
+        assert_eq!(n, cnt, "not enough elements to read");
+        collection
+    }};
 }
 
 #[macro_export] macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
