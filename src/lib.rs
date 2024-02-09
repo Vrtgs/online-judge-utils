@@ -200,7 +200,7 @@ macro_rules! read {
         (0..({$n} as usize))
             .map(|_| read!($($t)*))
             .map($map)
-            .collect::<$container<_>>();
+            .collect::<$container<_>>()
     };
     [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {
         $crate::read!(r!($t); $n; $container; Map($map))
