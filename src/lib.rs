@@ -203,7 +203,7 @@ macro_rules! read {
         let n = {$n} as usize;
         let mut cnt = 0;
         let collection = $crate::with_token_reader(|r| {
-            r.by_ref().take(n).map(|x| $crate::parse!(x, $t)).map($map).inspect(|_| cnt += 1).collect::<$container<$t>>()
+            r.by_ref().take(n).map(|x| $crate::parse!(x, $t)).map($map).inspect(|_| cnt += 1).collect::<$container<_>>()
         });
         assert_eq!(n, cnt, "not enough elements to read");
         collection
