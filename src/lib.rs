@@ -186,28 +186,31 @@ macro_rules! read {
     ($t:ty) => { $crate::parse!(read!(), $t) };
     ($($t:ty),+ $(,)?) => { ($($crate::read!($t)),+) };
 
-    [$t:ty; $n:literal] => { $crate::read![$t; $n; Array] };
-    [$t:ty; $n:expr; Array] => { ::std::array::from_fn::<$t, {$n as usize}, _>(|_| $crate::read!($t)) };
+    [r!($($t:tt)*); $n:expr; Array; Map($map: expr)] => {{
+        #[allow(unused_mut)]
+        let mut map = ($map);
+        ::std::array::from_fn::<_, {$n as usize}, _>(|_| map($crate::read!($($t)*)))
+    }};
+    [r!($($t:tt)*); $n:expr; Array] => { $crate::read!(r!($($t)*); $n; Array; Map(|x| x)) };
+    [$t:ty; $n:expr; Array]     => { $crate::read!(r!($t); $n; Array) };
+    [r!($($t:tt)*); $n:literal] => { $crate::read![r!($($t)*); $n; Array] };
+    [$t:ty; $n:literal] => { $crate::read![r!($t); $n] };
 
-    [$t:ty; $n:expr] => {{ use ::std::vec::Vec; $crate::read![$t; $n; Vec] }};
-    [$t:ty; $n:expr; $container: ident] => {{
-        let n = {$n} as usize;
-        let mut cnt = 0;
-        let collection = $crate::with_token_reader(|r| {
-            r.by_ref().take(n).map(|x| $crate::parse!(x, $t)).inspect(|_| cnt += 1).collect::<$container<$t>>()
-        });
-        assert_eq!(n, cnt, "not enough elements to read");
-        collection
-    }};
-    [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {{
-        let n = {$n} as usize;
-        let mut cnt = 0;
-        let collection = $crate::with_token_reader(|r| {
-            r.by_ref().take(n).map(|x| $crate::parse!(x, $t)).map($map).inspect(|_| cnt += 1).collect::<$container<_>>()
-        });
-        assert_eq!(n, cnt, "not enough elements to read");
-        collection
-    }};
+    [r!($($t:tt)*); $n:expr; $container: ident; Map($map: expr)] => {
+        (0..({$n} as usize))
+            .map(|_| read!($($t)*))
+            .map($map)
+            .collect::<$container<_>>();
+    };
+    [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {
+        $crate::read!(r!($t); $n; $container; Map($map))
+    };
+
+    [r!($($t:tt)*); $n:expr; $container: ident] => { $crate::read!(r!($($t)*); $n; $container; Map(|x| x)) };
+    [     $t:ty   ; $n:expr; $container: ident] => { $crate::read!(r!(  $t  ); $n; $container) };
+
+    [r!($($t:tt)*); $n:expr] => {{ use ::std::vec::Vec; $crate::read![r!($($t)*); $n; Vec] }};
+    [     $t:ty   ; $n:expr] => { $crate::read![r!($t); $n; Vec] };
 }
 
 #[macro_export] macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
