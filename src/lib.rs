@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::io::{Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Not};
 use std::sync::atomic::{AtomicBool, Ordering};
 use modding_num::Modding;
 
@@ -169,6 +169,7 @@ impl DerefMut for InputSource {
 impl InputSource {
     fn try_default() -> Option<InputSource> {
         FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst)
+            .not()
             .then(|| Box::new(std::io::stdin().lock()) as Box<dyn Read>)
             .map(InputSource)
     }
