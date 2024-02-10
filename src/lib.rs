@@ -292,10 +292,10 @@ macro_rules! file_io {
         out: $out_file: literal $(,)?
     ) => {{
         $crate::set_input (
-            BufReader::new(File::open  ($in_file ).unwrap())
+            ::std::io::BufReader::new(::std::fs::File::open  ($in_file ).unwrap())
         );
         $crate::set_output(
-            BufWriter::new(File::create($out_file).unwrap())
+            ::std::io::BufWriter::new(::std::fs::File::create($out_file).unwrap())
         );
     }};
 }
