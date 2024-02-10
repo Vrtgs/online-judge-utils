@@ -1,7 +1,9 @@
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
+use std::fmt::Display;
 use std::str::FromStr;
 use std::io::Read;
+use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::sync::atomic::{AtomicBool, Ordering};
 use modding_num::Modding;
@@ -211,6 +213,28 @@ macro_rules! read {
 
     [r!($($t:tt)*); $n:expr] => {{ use ::std::vec::Vec; $crate::read![r!($($t)*); $n; Vec] }};
     [     $t:ty   ; $n:expr] => { $crate::read![r!($t); $n; Vec] };
+}
+
+#[doc(hidden)]
+pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
+    const WRITE_ERR_MSG: &str = "unable to write to stdout";
+
+    let mut out = std::io::stdout().lock();
+    let mut iter = iter.into_iter();
+    if let Some(first) = iter.next() {
+        write!(out, "{first}").expect(WRITE_ERR_MSG);
+        for x in iter {
+            write!(out, " {x}").expect(WRITE_ERR_MSG);
+        }
+    }
+
+    out.write_all(b"\n").expect(WRITE_ERR_MSG);
+    out.flush().expect(WRITE_ERR_MSG);
+}
+#[macro_export]
+macro_rules! output {
+    (one  $x: expr) => { $crate::__output(Some($x)) };
+    (iter $x: expr) => { $crate::__output($x) };
 }
 
 #[macro_export] macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}

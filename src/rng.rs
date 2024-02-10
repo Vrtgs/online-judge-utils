@@ -27,7 +27,7 @@ pub fn rand() -> u64 {
         let seed = RandomState::new();
 
         let mut out = 0;
-        let mut cnt = 0;
+        let mut cnt = 0_i64;
         while out == 0 {
             cnt += 1;
             out = seed.hash_one(cnt);

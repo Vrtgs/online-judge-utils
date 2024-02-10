@@ -4,7 +4,9 @@ fn main() {
     // use std::io::Write;
     // use proc_macro2::TokenStream;
     //
-    // let src = include_str!("./minified/minified.rs")
+    // let src = include_str!("./src/lib.rs")
+    //     .replace("mod rng;", &format!("mod rng {{ {} }}", include_str!("./src/rng.rs")))
+    //     .replace("mod modding_num;", &format!("mod modding_num {{ {} }}", include_str!("./src/modding_num.rs")))
     //     .parse::<TokenStream>().unwrap();
     //
     // let mini = format!("#[cfg(not(feature = \"local-build\"))] #[macro_use] pub mod online_judge_utils {{ {src} }}")
