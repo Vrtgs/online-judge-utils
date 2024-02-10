@@ -6,7 +6,10 @@ use std::io::{Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::ops::{Deref, DerefMut, Not};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::thread::{Thread, ThreadId};
 use modding_num::Modding;
 
 #[cfg(feature = "heap-array")]
@@ -148,6 +151,7 @@ impl<'a> Iterator for TokenReader<'a> {
     }
 }
 
+
 static FIRST_INPUT_THREAD: AtomicBool = AtomicBool::new(false);
 
 struct InputSource(Box<dyn Read>);
@@ -166,12 +170,13 @@ impl DerefMut for InputSource {
         &mut *self.0
     }
 }
-impl InputSource {
-    fn try_default() -> Option<InputSource> {
+impl Default for InputSource {
+    fn default() -> InputSource {
         FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst)
             .not()
             .then(|| Box::new(std::io::stdin().lock()) as Box<dyn Read>)
             .map(InputSource)
+            .expect("Only 1 thread can take input")
     }
 }
 
@@ -225,8 +230,8 @@ impl Drop for DroppingOutputSource {
 }
 
 thread_local! {
-    static INPUT_SOURCE: UnsafeCell<Option<InputSource>> =
-        UnsafeCell::new(InputSource::try_default());
+    static INPUT_SOURCE: UnsafeCell<InputSource> =
+        UnsafeCell::new(InputSource::default());
 
     static OUTPUT_SOURCE: DroppingOutputSource = DroppingOutputSource::default();
 
@@ -234,9 +239,7 @@ thread_local! {
         let mut buf = String::with_capacity(1024 * 1024);
         INPUT_SOURCE.with(|r| {
             // we don't let borrows escape the current thread, not the func
-            unsafe {&mut *r.get()}
-                .as_mut()
-                .expect("Only 1 thread can take input")
+            unsafe {&mut **r.get()}
                 .read_to_string(&mut buf)
                 .expect("unable to read input to a string")
         });
@@ -267,7 +270,7 @@ pub fn set_input(input: impl Read + 'static) {
 
         let input = std::mem::replace(
             unsafe { &mut *r#in.get() },
-            Some(InputSource(Box::new(input)))
+            InputSource(Box::new(input))
         );
         // make sure its dropped after to avoid some weird deadlock
         drop(input)
@@ -299,6 +302,11 @@ macro_rules! file_io {
             ::std::io::BufWriter::new(::std::fs::File::create($out_file).unwrap())
         );
     }};
+}
+
+#[macro_export]
+macro_rules! flush {
+    () => { $crate::__flush() }
 }
 
 #[macro_export]
@@ -342,7 +350,7 @@ macro_rules! read {
 
 #[doc(hidden)]
 pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
-    const WRITE_ERR_MSG: &str = "unable to write to stdout";
+    const WRITE_ERR_MSG: &str = "unable to write to output";
 
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
@@ -356,7 +364,14 @@ pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
         }
 
         out.write_all(b"\n").expect(WRITE_ERR_MSG);
-        out.flush().expect(WRITE_ERR_MSG);
+    })
+}
+
+#[doc(hidden)]
+pub fn __flush() {
+    OUTPUT_SOURCE.with(|out| {
+        // we don't let borrows escape the current thread, not the func
+        unsafe { &mut **out.get() }.flush().expect("unable to flush stdout");
     })
 }
 
