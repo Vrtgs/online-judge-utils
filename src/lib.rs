@@ -5,6 +5,7 @@ use std::str::FromStr;
 use std::io::{Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use modding_num::Modding;
 
@@ -149,22 +150,94 @@ impl<'a> Iterator for TokenReader<'a> {
 
 static FIRST_INPUT_THREAD: AtomicBool = AtomicBool::new(false);
 
-thread_local! {
-    static INPUT_SOURCE: UnsafeCell<Box<dyn Read>> =
-        UnsafeCell::new(Box::new(std::io::stdin().lock()));
+struct InputSource(Box<dyn Read>);
 
-    static OUTPUT_SOURCE: UnsafeCell<Box<dyn Write>> =
-        UnsafeCell::new(Box::new(std::io::stdout().lock()));
+impl Deref for InputSource {
+    type Target = dyn Read;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+impl DerefMut for InputSource {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}
+impl InputSource {
+    fn try_default() -> Option<InputSource> {
+        FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst)
+            .then(|| Box::new(std::io::stdin().lock()) as Box<dyn Read>)
+            .map(InputSource)
+    }
+}
+
+struct OutputSource(Box<dyn Write>);
+
+impl Default for OutputSource {
+    fn default() -> Self {
+        OutputSource(Box::new(std::io::stdout().lock()))
+    }
+}
+
+impl Deref for OutputSource {
+    type Target = dyn Write;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl DerefMut for OutputSource {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.0
+    }
+}
+
+#[derive(Default)]
+struct DroppingOutputSource(UnsafeCell<OutputSource>);
+
+impl Deref for DroppingOutputSource {
+    type Target = UnsafeCell<OutputSource>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for DroppingOutputSource {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for DroppingOutputSource {
+    fn drop(&mut self) {
+        self.get_mut().flush().expect("FATAL: output source refused flush")
+    }
+}
+
+thread_local! {
+    static INPUT_SOURCE: UnsafeCell<Option<InputSource>> =
+        UnsafeCell::new(InputSource::try_default());
+
+    static OUTPUT_SOURCE: DroppingOutputSource = DroppingOutputSource::default();
 
     static TOKEN_READER: UnsafeCell<TokenReader<'static>> = {
-        if FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst) {
-            panic!("Only 1 thread can take input")
-        }
-
         let mut buf = String::with_capacity(1024 * 1024);
         INPUT_SOURCE.with(|r| {
             // we don't let borrows escape the current thread, not the func
-            unsafe {&mut **r.get()}.read_to_string(&mut buf).unwrap()
+            unsafe {&mut *r.get()}
+                .as_mut()
+                .expect("Only 1 thread can take input")
+                .read_to_string(&mut buf)
+                .expect("unable to read input to a string")
         });
 
         buf.shrink_to_fit();
@@ -179,9 +252,9 @@ pub fn set_output(output: impl Write + 'static) {
         // we don't let borrows escape the current thread, not the func
         let mut out = std::mem::replace(
             unsafe { &mut *out.get() },
-            Box::new(output)
+            OutputSource(Box::new(output))
         );
-        out.flush().expect("could not flush the old input");
+        out.flush().expect("could not flush the old output");
         // make sure its dropped after to avoid some weird deadlock
         drop(out)
     })
@@ -193,7 +266,7 @@ pub fn set_input(input: impl Read + 'static) {
 
         let input = std::mem::replace(
             unsafe { &mut *r#in.get() },
-            Box::new(input)
+            Some(InputSource(Box::new(input)))
         );
         // make sure its dropped after to avoid some weird deadlock
         drop(input)
@@ -209,6 +282,22 @@ pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -
         let r = unsafe { &mut *r_ptr.get() };
         fun(r)
     })
+}
+
+
+#[macro_export]
+macro_rules! file_io {
+    (
+        in : $in_file : literal $(,)?
+        out: $out_file: literal $(,)?
+    ) => {{
+        $crate::set_input (
+            BufReader::new(File::open  ($in_file ).unwrap())
+        );
+        $crate::set_output(
+            BufWriter::new(File::create($out_file).unwrap())
+        );
+    }};
 }
 
 #[macro_export]
