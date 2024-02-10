@@ -6,10 +6,7 @@ use std::io::{Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::ops::{Deref, DerefMut, Not};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::thread;
-use std::thread::{Thread, ThreadId};
+use std::sync::atomic::{AtomicBool, Ordering};
 use modding_num::Modding;
 
 #[cfg(feature = "heap-array")]
