@@ -1,8 +1,8 @@
-use std::cell::UnsafeCell;
+use std::cell::{UnsafeCell};
 use std::cmp::Reverse;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::io::Read;
+use std::io::{Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,13 +150,23 @@ impl<'a> Iterator for TokenReader<'a> {
 static FIRST_INPUT_THREAD: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
+    static INPUT_SOURCE: UnsafeCell<Box<dyn Read>> =
+        UnsafeCell::new(Box::new(std::io::stdin().lock()));
+
+    static OUTPUT_SOURCE: UnsafeCell<Box<dyn Write>> =
+        UnsafeCell::new(Box::new(std::io::stdout().lock()));
+
     static TOKEN_READER: UnsafeCell<TokenReader<'static>> = {
         if FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst) {
             panic!("Only 1 thread can take input")
         }
 
         let mut buf = String::with_capacity(1024 * 1024);
-        std::io::stdin().lock().read_to_string(&mut buf).unwrap();
+        INPUT_SOURCE.with(|r| {
+            // we don't let borrows escape the current thread, not the func
+            unsafe {&mut **r.get()}.read_to_string(&mut buf).unwrap()
+        });
+
         buf.shrink_to_fit();
         UnsafeCell::new(TokenReader {
             data: buf.leak()
@@ -164,6 +174,31 @@ thread_local! {
     }
 }
 
+pub fn set_output(output: impl Write + 'static) {
+    OUTPUT_SOURCE.with(|out| {
+        // we don't let borrows escape the current thread, not the func
+        let mut out = std::mem::replace(
+            unsafe { &mut *out.get() },
+            Box::new(output)
+        );
+        out.flush().expect("could not flush the old input");
+        // make sure its dropped after to avoid some weird deadlock
+        drop(out)
+    })
+}
+
+pub fn set_input(input: impl Read + 'static) {
+    INPUT_SOURCE.with(|r#in| {
+        // we don't let borrows escape the current thread, not the func
+
+        let input = std::mem::replace(
+            unsafe { &mut *r#in.get() },
+            Box::new(input)
+        );
+        // make sure its dropped after to avoid some weird deadlock
+        drop(input)
+    })
+}
 
 /// This is the only safe way to get a reference to TOKEN_READER
 #[doc(hidden)]
@@ -219,18 +254,22 @@ macro_rules! read {
 pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
     const WRITE_ERR_MSG: &str = "unable to write to stdout";
 
-    let mut out = std::io::stdout().lock();
-    let mut iter = iter.into_iter();
-    if let Some(first) = iter.next() {
-        write!(out, "{first}").expect(WRITE_ERR_MSG);
-        for x in iter {
-            write!(out, " {x}").expect(WRITE_ERR_MSG);
+    OUTPUT_SOURCE.with(|out| {
+        // we don't let borrows escape the current thread, not the func
+        let out = unsafe { &mut **out.get() };
+        let mut iter = iter.into_iter();
+        if let Some(first) = iter.next() {
+            write!(out, "{first}").expect(WRITE_ERR_MSG);
+            for x in iter {
+                write!(out, " {x}").expect(WRITE_ERR_MSG);
+            }
         }
-    }
 
-    out.write_all(b"\n").expect(WRITE_ERR_MSG);
-    out.flush().expect(WRITE_ERR_MSG);
+        out.write_all(b"\n").expect(WRITE_ERR_MSG);
+        out.flush().expect(WRITE_ERR_MSG);
+    })
 }
+
 #[macro_export]
 macro_rules! output {
     (one  $x: expr) => { $crate::__output(Some($x)) };
