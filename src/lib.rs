@@ -2,7 +2,7 @@ use std::cell::{UnsafeCell};
 use std::cmp::Reverse;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::io::{Read};
+use std::io::Read;
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::ops::{Deref, DerefMut, Not};
@@ -77,7 +77,9 @@ impl<'a> Parse<'a> for &'a str {
 }
 
 parse_upstream! {
-    f32 f64 i8 i16 i32 i64 isize i128 u8 u16 u32 u64 usize u128
+    f32 f64
+    i8 i16 i32 i64 isize i128
+    u8 u16 u32 u64 usize u128
     char bool String
 }
 parse_non_zero! {
@@ -92,6 +94,12 @@ parse_non_zero! {
 
     NonZeroI64 |> i64
     NonZeroU64 |> u64
+
+    NonZeroI128 |> i128
+    NonZeroU128 |> u128
+
+    NonZeroUsize |> usize
+    NonZeroIsize |> isize
 }
 parse_wrapped!  {
     Reverse<T>
@@ -100,8 +108,6 @@ parse_wrapped!  {
     Modding<T, for{const N: u64}>
 }
 
-
-#[repr(transparent)]
 pub struct TokenReader<'a> {
     data: &'a str,
 }
