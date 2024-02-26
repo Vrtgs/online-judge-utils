@@ -2,7 +2,7 @@ use std::cell::{UnsafeCell};
 use std::cmp::Reverse;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::io::Read;
+use std::io::{BufRead, BufReader, BufWriter, Read};
 use std::io::Write;
 use std::num::{Wrapping, Saturating};
 use std::ops::{Deref, DerefMut, Not};
@@ -157,10 +157,10 @@ impl<'a> Iterator for TokenReader<'a> {
 
 static FIRST_INPUT_THREAD: AtomicBool = AtomicBool::new(false);
 
-struct InputSource(Box<dyn Read>);
+struct InputSource(Box<dyn BufRead>);
 
 impl Deref for InputSource {
-    type Target = dyn Read;
+    type Target = dyn BufRead;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -177,33 +177,33 @@ impl Default for InputSource {
     fn default() -> InputSource {
         FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst)
             .not()
-            .then(|| Box::new(std::io::stdin().lock()) as Box<dyn Read>)
+            .then(|| Box::new(std::io::stdin().lock()) as Box<dyn BufRead>)
             .map(InputSource)
             .expect("Only 1 thread can take input")
     }
 }
 
-struct OutputSource(Box<dyn Write>);
+struct OutputSource(BufWriter<Box<dyn Write>>);
 
 impl Default for OutputSource {
     fn default() -> Self {
-        OutputSource(Box::new(std::io::stdout().lock()))
+        OutputSource(BufWriter::new(Box::new(std::io::stdout().lock())))
     }
 }
 
 impl Deref for OutputSource {
-    type Target = dyn Write;
+    type Target = BufWriter<dyn Write>;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 
 impl DerefMut for OutputSource {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.0
+        &mut self.0
     }
 }
 
@@ -259,7 +259,7 @@ pub fn set_output(output: impl Write + 'static) {
         // we don't let borrows escape the current thread, not the func
         let mut out = std::mem::replace(
             unsafe { &mut *out.get() },
-            OutputSource(Box::new(output))
+            OutputSource(BufWriter::new(Box::new(output)))
         );
         out.flush().expect("could not flush the old output");
         // make sure its dropped after to avoid some weird deadlock
@@ -268,6 +268,10 @@ pub fn set_output(output: impl Write + 'static) {
 }
 
 pub fn set_input(input: impl Read + 'static) {
+    set_buffered_input(BufReader::new(input))
+}
+
+pub fn set_buffered_input(input: impl BufRead + 'static) {
     INPUT_SOURCE.with(|r#in| {
         // we don't let borrows escape the current thread, not the func
 
@@ -279,6 +283,7 @@ pub fn set_input(input: impl Read + 'static) {
         drop(input)
     })
 }
+
 
 /// This is the only safe way to get a reference to TOKEN_READER
 #[doc(hidden)]
@@ -295,16 +300,16 @@ pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -
 #[macro_export]
 macro_rules! file_io {
     (
-        in : $in_file : literal $(,)?
-        out: $out_file: literal $(,)?
+        $(in : $in_file : literal $(,)?)?
+        $(out: $out_file: literal $(,)?)?
     ) => {{
-        $crate::set_input (
-            ::std::io::BufReader::new(::std::fs::File::open  ($in_file ).unwrap())
-        );
-        $crate::set_output(
-            ::std::io::BufWriter::new(::std::fs::File::create($out_file).unwrap())
-        );
+        $($crate::set_input (::std::fs::File::open  ($in_file ).unwrap());)?
+        $($crate::set_output(::std::fs::File::create($out_file).unwrap());)?
     }};
+    (
+        $(out: $out_file: literal $(,)?)?
+        $(in : $in_file : literal $(,)?)?
+    ) => {$crate::file_io!(in: $in_file, out: $out_file)};
 }
 
 #[macro_export]
