@@ -372,6 +372,8 @@ pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
         }
 
         out.write_all(b"\n").expect(WRITE_ERR_MSG);
+
+        if cfg!(debug_assertions) { let _ = out.flush(); }
     })
 }
 
