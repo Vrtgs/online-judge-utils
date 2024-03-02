@@ -192,7 +192,7 @@ impl Default for OutputSource {
 }
 
 impl Deref for OutputSource {
-    type Target = BufWriter<dyn Write>;
+    type Target = BufWriter<Box<dyn Write>>;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
