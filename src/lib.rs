@@ -255,11 +255,15 @@ thread_local! {
 }
 
 pub fn set_output(output: impl Write + 'static) {
+    set_output_buffered(BufWriter::new(Box::new(output)))
+}
+
+pub fn set_output_buffered(output: BufWriter<Box<dyn Write>>) {
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
         let mut out = std::mem::replace(
             unsafe { &mut *out.get() },
-            OutputSource(BufWriter::new(Box::new(output)))
+            OutputSource(output)
         );
         out.flush().expect("could not flush the old output");
         // make sure its dropped after to avoid some weird deadlock
@@ -268,10 +272,10 @@ pub fn set_output(output: impl Write + 'static) {
 }
 
 pub fn set_input(input: impl Read + 'static) {
-    set_buffered_input(BufReader::new(input))
+    set_input_buffered(BufReader::new(input))
 }
 
-pub fn set_buffered_input(input: impl BufRead + 'static) {
+pub fn set_input_buffered(input: impl BufRead + 'static) {
     INPUT_SOURCE.with(|r#in| {
         // we don't let borrows escape the current thread, not the func
 
@@ -387,8 +391,8 @@ pub fn __flush() {
 
 #[macro_export]
 macro_rules! output {
-    (one  $x: expr) => { $crate::__output(Some($x)) };
-    (iter $x: expr) => { $crate::__output($x) };
+    (one  $x: expr) => { $crate::output!(iter [$x]) };
+    (iter $x: expr) => { $crate::__output(($x).into_iter()) };
 }
 
 #[macro_export] macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
