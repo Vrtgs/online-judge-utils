@@ -1,18 +1,72 @@
-use std::cell::{UnsafeCell};
+use modding_num::Modding;
+use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::fmt::Display;
-use std::str::FromStr;
-use std::io::{BufRead, BufReader, BufWriter, Read};
 use std::io::Write;
-use std::num::{Wrapping, Saturating};
+use std::io::{BufRead, BufReader, BufWriter, Read};
+use std::num::{Saturating, Wrapping};
 use std::ops::{Deref, DerefMut, Not};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use modding_num::Modding;
 
 #[cfg(feature = "heap-array")]
-pub mod heap_array { pub use ::heap_array::*; }
-pub mod rng;
+pub mod heap_array {
+    pub use ::heap_array::*;
+}
+
+pub mod bumpy {
+    use std::alloc::{GlobalAlloc, Layout};
+    use std::cell::UnsafeCell;
+    use std::mem::MaybeUninit;
+    use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    pub struct Bumpy<const LEN: usize> {
+        curr: AtomicUsize,
+        arena: UnsafeCell<[MaybeUninit<u8>; LEN]>
+    }
+
+    unsafe impl<const LEN: usize> Send for Bumpy<LEN> {}
+    unsafe impl<const LEN: usize> Sync for Bumpy<LEN> {}
+    
+    impl<const LEN: usize> Bumpy<LEN> {
+        pub const fn empty() -> Self {
+            Self {
+                curr: AtomicUsize::new(0),
+                arena: UnsafeCell::new(
+                    // [MaybeUninit<u8>; LEN] is safe ot not be init
+                    unsafe { MaybeUninit::uninit().assume_init() }
+                ),
+            }
+        }
+    }
+
+    unsafe impl<const LEN: usize> GlobalAlloc for Bumpy<LEN> {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let alloc_len = (layout.size() + layout.align()) - 1;
+            let curr = self.curr.fetch_add(alloc_len, Ordering::Relaxed);
+
+            if (curr + alloc_len) >= LEN {
+                return ptr::null_mut();
+            }
+
+            let ptr = self.arena.get().cast::<u8>().add(curr);
+            let offset = ptr.align_offset(layout.align());
+
+            if offset >= layout.align() {
+                return ptr::null_mut();
+            }
+
+            ptr.add(offset)
+        }
+        
+        #[inline(always)]
+        unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
+    }
+}
+
 pub mod modding_num;
+pub mod rng;
 
 /// [`FromStr`] with lifetime support
 pub trait Parse<'a>: Sized {
@@ -101,7 +155,7 @@ parse_non_zero! {
     NonZeroUsize |> usize
     NonZeroIsize |> isize
 }
-parse_wrapped!  {
+parse_wrapped! {
     Reverse<T>
     Wrapping<T>
     Saturating<T>
@@ -113,35 +167,37 @@ pub struct TokenReader<'a> {
 }
 
 impl<'a> TokenReader<'a> {
-    fn _next(&mut self, mut f: impl FnMut(u8) -> bool) -> Option<&'a str> {
+    fn next(&mut self, mut f: impl FnMut(char) -> bool) -> Option<&'a str> {
         if self.data.is_empty() {
-            return None
+            return None;
         }
 
-        while let Some(idx) = self.data.bytes().position(&mut f) {
+        while let Some(idx) = self.data.char_indices().find_map(|(i, c)| f(c).then_some(i)) {
             // all of these are ascii operations, we won't break any utf-8 boundaries
             // and position always returns a value within the iterator
             let ret = unsafe { self.data.get_unchecked(..idx) };
             self.data = unsafe { self.data.get_unchecked(idx + 1..) };
-            if ret.is_empty() { continue }
+            if ret.is_empty() {
+                continue;
+            }
 
-            return Some(ret)
+            return Some(ret);
         }
 
         match self.data.is_empty() {
             true => None,
-            false => Some(std::mem::take(&mut self.data))
+            false => Some(std::mem::take(&mut self.data)),
         }
     }
 
     #[inline(always)]
     pub fn next_token(&mut self) -> Option<&'a str> {
-        self._next(|b: u8| -> bool { b.is_ascii_whitespace() })
+        self.next(|b| -> bool { b.is_whitespace() })
     }
 
     #[inline(always)]
     pub fn next_line(&mut self) -> Option<&'a str> {
-        self._next(|b: u8| -> bool { matches!(b, b'\n' | b'\r') })
+        self.next(|b| -> bool { matches!(b, '\n' | '\r') })
     }
 }
 
@@ -153,7 +209,6 @@ impl<'a> Iterator for TokenReader<'a> {
         self.next_token()
     }
 }
-
 
 static FIRST_INPUT_THREAD: AtomicBool = AtomicBool::new(false);
 
@@ -175,7 +230,8 @@ impl DerefMut for InputSource {
 }
 impl Default for InputSource {
     fn default() -> InputSource {
-        FIRST_INPUT_THREAD.swap(true, Ordering::SeqCst)
+        FIRST_INPUT_THREAD
+            .swap(true, Ordering::SeqCst)
             .not()
             .then(|| Box::new(std::io::stdin().lock()) as Box<dyn BufRead>)
             .map(InputSource)
@@ -228,7 +284,9 @@ impl DerefMut for DroppingOutputSource {
 
 impl Drop for DroppingOutputSource {
     fn drop(&mut self) {
-        self.get_mut().flush().expect("FATAL: output source refused flush")
+        self.get_mut()
+            .flush()
+            .expect("FATAL: output source refused flush")
     }
 }
 
@@ -261,10 +319,7 @@ pub fn set_output(output: impl Write + 'static) {
 pub fn set_output_buffered(output: BufWriter<Box<dyn Write>>) {
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
-        let mut out = std::mem::replace(
-            unsafe { &mut *out.get() },
-            OutputSource(output)
-        );
+        let mut out = std::mem::replace(unsafe { &mut *out.get() }, OutputSource(output));
         out.flush().expect("could not flush the old output");
         // make sure its dropped after to avoid some weird deadlock
         drop(out)
@@ -279,15 +334,11 @@ pub fn set_input_buffered(input: impl BufRead + 'static) {
     INPUT_SOURCE.with(|r#in| {
         // we don't let borrows escape the current thread, not the func
 
-        let input = std::mem::replace(
-            unsafe { &mut *r#in.get() },
-            InputSource(Box::new(input))
-        );
+        let input = std::mem::replace(unsafe { &mut *r#in.get() }, InputSource(Box::new(input)));
         // make sure its dropped after to avoid some weird deadlock
         drop(input)
     })
 }
-
 
 /// This is the only safe way to get a reference to TOKEN_READER
 #[doc(hidden)]
@@ -299,7 +350,6 @@ pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -
         fun(r)
     })
 }
-
 
 #[macro_export]
 macro_rules! file_io {
@@ -318,12 +368,16 @@ macro_rules! file_io {
 
 #[macro_export]
 macro_rules! flush {
-    () => { $crate::__flush() }
+    () => {
+        $crate::__flush()
+    };
 }
 
 #[macro_export]
 macro_rules! parse {
-    ($val:expr, $t:ty) => { <$t as $crate::Parse>::from_str($val).unwrap() };
+    ($val:expr, $t:ty) => {
+        <$t as $crate::Parse>::from_str($val).unwrap()
+    };
 }
 
 #[macro_export]
@@ -331,7 +385,14 @@ macro_rules! read {
     (    ) => { $crate::with_token_reader(|r| r.next_token()).expect("Ran out of input") };
     (line) => { $crate::with_token_reader(|r| r.next_line ()).expect("Ran out of input") };
     ($t:ty) => { $crate::parse!(read!(), $t) };
-    ($($t:ty),+ $(,)?) => { ($($crate::read!($t)),+) };
+    ($($t:ty),+ $(,)?) => { ($($crate::read!($t)),+,) };
+
+    [r!($($t:tt)*); $n:expr; Iterator] => {
+        (0..({$n} as usize)).map(|_| read!($($t)*))
+    };
+    [$t:ty; $n:expr; Iterator] => {
+        read![r!($t); $n; Iterator]
+    };
 
     [r!($($t:tt)*); $n:expr; Array; Map($map: expr)] => {{
         #[allow(unused_mut)]
@@ -344,8 +405,7 @@ macro_rules! read {
     [$t:ty; $n:literal] => { $crate::read![r!($t); $n] };
 
     [r!($($t:tt)*); $n:expr; $container: ident; Map($map: expr)] => {
-        (0..({$n} as usize))
-            .map(|_| read!($($t)*))
+        read![r!($($t)*); $n; Iterator]
             .map($map)
             .collect::<$container<_>>()
     };
@@ -361,7 +421,7 @@ macro_rules! read {
 }
 
 #[doc(hidden)]
-pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
+pub fn __output<I: IntoIterator<Item = D>, D: Display>(iter: I) {
     const WRITE_ERR_MSG: &str = "unable to write to output";
 
     OUTPUT_SOURCE.with(|out| {
@@ -377,7 +437,9 @@ pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
 
         out.write_all(b"\n").expect(WRITE_ERR_MSG);
 
-        if cfg!(debug_assertions) { let _ = out.flush(); }
+        if cfg!(debug_assertions) {
+            let _ = out.flush();
+        }
     })
 }
 
@@ -385,15 +447,23 @@ pub fn __output<I: IntoIterator<Item=D>, D: Display>(iter: I) {
 pub fn __flush() {
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
-        unsafe { &mut **out.get() }.flush().expect("unable to flush stdout");
+        unsafe { &mut **out.get() }
+            .flush()
+            .expect("unable to flush stdout");
     })
 }
 
 #[macro_export]
 macro_rules! output {
-    (one  $x: expr) => { $crate::output!(iter [$x]) };
-    (iter $x: expr) => { $crate::__output(($x).into_iter()) };
+    (one  $x: expr) => {
+        $crate::output!(iter ::std::iter::once($x))
+    };
+    (iter $x: expr) => {
+        $crate::__output(($x).into_iter())
+    };
 }
 
-#[macro_export] macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
-#[macro_export] macro_rules! max {($first: expr $(, $other: expr)+) => {($first)$(.max($other))+};}
+#[macro_export]
+macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
+#[macro_export]
+macro_rules! max {($first: expr $(, $other: expr)+) => {($first)$(.max($other))+};}

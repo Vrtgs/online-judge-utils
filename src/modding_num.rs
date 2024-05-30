@@ -1,10 +1,5 @@
 use std::ops::{
-    Add, AddAssign,
-    Div, DivAssign,
-    Mul, MulAssign,
-    Rem, RemAssign,
-    Shl, ShlAssign,
-    Shr, ShrAssign,
+    Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign,
     Sub, SubAssign,
 };
 
@@ -46,7 +41,7 @@ macro_rules! forward_ref_binop {
     }
 }
 
-trait GetRemainder<const N: u64>: Sized + Copy + Rem<Self, Output=Self> {
+trait GetRemainder<const N: u64>: Sized + Copy + Rem<Self, Output = Self> {
     const MOD_BY: Self;
 }
 
