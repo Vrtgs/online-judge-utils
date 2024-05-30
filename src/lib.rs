@@ -416,7 +416,7 @@ macro_rules! read {
     [r!($($t:tt)*); $n:expr; $container: ident] => { $crate::read!(r!($($t)*); $n; $container; Map(|x| x)) };
     [     $t:ty   ; $n:expr; $container: ident] => { $crate::read!(r!(  $t  ); $n; $container) };
 
-    [r!($($t:tt)*); $n:expr] => {{ use ::std::vec::Vec; $crate::read![r!($($t)*); $n; Vec] }};
+    [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; $crate::read![r!($($t)*); $n; Box] }};
     [     $t:ty   ; $n:expr] => { $crate::read![r!($t); $n; Vec] };
 }
 
