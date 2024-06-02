@@ -10,11 +10,6 @@ use std::ops::{Deref, DerefMut, Not};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(feature = "heap-array")]
-pub mod heap_array {
-    pub use ::heap_array::*;
-}
-
 pub mod bumpy {
     use std::alloc::{GlobalAlloc, Layout};
     use std::cell::UnsafeCell;
@@ -68,6 +63,11 @@ pub mod bumpy {
 
 pub mod modding_num;
 pub mod rng;
+
+#[cfg(feature = "heap-array")]
+pub mod heap_array {
+    pub use ::heap_array::*;
+}
 
 /// [`FromStr`] with lifetime support
 pub trait Parse<'a>: Sized {
