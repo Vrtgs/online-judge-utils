@@ -570,6 +570,6 @@ macro_rules! output {
 }
 
 #[macro_export]
-macro_rules! min {($first: expr $(, $other: expr)+) => {($first)$(.min($other))+};}
+macro_rules! min {($first: expr $(, $other: expr)+ $(,)?) => {($first)$(.min($other))+};}
 #[macro_export]
-macro_rules! max {($first: expr $(, $other: expr)+) => {($first)$(.max($other))+};}
+macro_rules! max {($first: expr $(, $other: expr)+ $(,)?) => {($first)$(.max($other))+};}
