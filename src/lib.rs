@@ -1,4 +1,5 @@
 use modding_num::Modding;
+use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::cmp::Reverse;
 use std::fmt::Display;
@@ -23,19 +24,19 @@ pub mod bumpy {
 
     pub struct Bumpy<const LEN: usize> {
         curr: AtomicUsize,
-        arena: UnsafeCell<[MaybeUninit<u8>; LEN]>
+        arena: UnsafeCell<[MaybeUninit<u8>; LEN]>,
     }
 
     unsafe impl<const LEN: usize> Send for Bumpy<LEN> {}
     unsafe impl<const LEN: usize> Sync for Bumpy<LEN> {}
-    
+
     impl<const LEN: usize> Bumpy<LEN> {
         pub const fn empty() -> Self {
             Self {
                 curr: AtomicUsize::new(0),
                 arena: UnsafeCell::new(
                     // [MaybeUninit<u8>; LEN] is safe ot not be init
-                    unsafe { MaybeUninit::uninit().assume_init() }
+                    unsafe { MaybeUninit::uninit().assume_init() },
                 ),
             }
         }
@@ -59,7 +60,7 @@ pub mod bumpy {
 
             ptr.add(offset)
         }
-        
+
         #[inline(always)]
         unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
     }
@@ -172,7 +173,11 @@ impl<'a> TokenReader<'a> {
             return None;
         }
 
-        while let Some(idx) = self.data.char_indices().find_map(|(i, c)| f(c).then_some(i)) {
+        while let Some(idx) = self
+            .data
+            .char_indices()
+            .find_map(|(i, c)| f(c).then_some(i))
+        {
             // all of these are ascii operations, we won't break any utf-8 boundaries
             // and position always returns a value within the iterator
             let ret = unsafe { self.data.get_unchecked(..idx) };
@@ -233,7 +238,7 @@ impl Default for InputSource {
         FIRST_INPUT_THREAD
             .swap(true, Ordering::SeqCst)
             .not()
-            .then(|| Box::new(std::io::stdin().lock()) as Box<dyn BufRead>)
+            .then(|| Box::new(io::stdin().lock()) as Box<dyn BufRead>)
             .map(InputSource)
             .expect("Only 1 thread can take input")
     }
@@ -243,7 +248,7 @@ struct OutputSource(BufWriter<Box<dyn Write>>);
 
 impl Default for OutputSource {
     fn default() -> Self {
-        OutputSource(BufWriter::new(Box::new(std::io::stdout().lock())))
+        OutputSource(BufWriter::new(Box::new(io::stdout().lock())))
     }
 }
 
@@ -290,6 +295,94 @@ impl Drop for DroppingOutputSource {
     }
 }
 
+use std::cell::RefCell;
+use std::panic::UnwindSafe;
+use std::rc::Rc;
+use std::{io, rc};
+
+pub struct OutputCapture {
+    inner: Rc<RefCell<Vec<u8>>>,
+    old_output: Box<dyn Write>,
+}
+
+struct OutputInner(rc::Weak<RefCell<Vec<u8>>>);
+
+impl OutputCapture {
+    pub fn connect() -> Self {
+        let inner = Rc::new(RefCell::new(Vec::new()));
+        let old = replace_output(OutputInner(Rc::downgrade(&inner)));
+        Self {
+            inner,
+            old_output: old,
+        }
+    }
+
+    pub fn capture(self) -> Capture {
+        let data =
+            Rc::try_unwrap(self.inner).map_or_else(|x| x.replace(Vec::new()), RefCell::into_inner);
+        Capture(Ok(data), self.old_output)
+    }
+}
+
+impl Write for OutputInner {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0
+            .upgrade()
+            // we got disconnected, no point in doing anything
+            .map_or(Ok(buf.len()), |cell| cell.borrow_mut().write(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct Capture(Result<Vec<u8>, Cow<'static, str>>, Box<dyn Write>);
+
+impl Capture {
+    pub fn flush(self) -> io::Result<()> {
+        let data = self.0.as_ref().map_or_else(|e| e.as_bytes(), |x| &**x);
+        let mut writer = BufWriter::new(self.1);
+        let res = writer.write_all(data);
+        set_output_buffered(writer);
+        res
+    }
+
+    pub fn set_output(self) {
+        self.replace_output();
+    }
+
+    pub fn replace_output(self) -> Box<dyn Write> {
+        replace_output(BufWriter::new(self.1))
+    }
+
+    pub fn into_inner(self) -> Result<Vec<u8>, Cow<'static, str>> {
+        self.0
+    }
+}
+
+pub fn capture(f: impl FnOnce() + UnwindSafe) -> Capture {
+    let output = OutputCapture::connect();
+
+    let res =
+        std::panic::catch_unwind(f).map_err(|panic| match panic.downcast_ref::<&'static str>() {
+            Some(&s) => Cow::Borrowed(s),
+            None => match panic.downcast::<String>() {
+                Ok(s) => Cow::Owned(*s),
+                Err(_) => Cow::Borrowed("Box<dyn Any>"),
+            },
+        });
+
+    match res {
+        Ok(()) => output.capture(),
+        Err(e) => {
+            let mut capture = output.capture();
+            capture.0 = Err(e);
+            capture
+        }
+    }
+}
+
 thread_local! {
     static INPUT_SOURCE: UnsafeCell<InputSource> =
         UnsafeCell::new(InputSource::default());
@@ -317,12 +410,20 @@ pub fn set_output(output: impl Write + 'static) {
 }
 
 pub fn set_output_buffered(output: BufWriter<Box<dyn Write>>) {
+    replace_output_buffered(output);
+}
+
+pub fn replace_output(output: impl Write + 'static) -> Box<dyn Write> {
+    replace_output_buffered(BufWriter::new(Box::new(output)))
+}
+
+pub fn replace_output_buffered(output: BufWriter<Box<dyn Write>>) -> Box<dyn Write> {
     OUTPUT_SOURCE.with(|out| {
-        // we don't let borrows escape the current thread, not the func
-        let mut out = std::mem::replace(unsafe { &mut *out.get() }, OutputSource(output));
-        out.flush().expect("could not flush the old output");
-        // make sure its dropped after to avoid some weird deadlock
-        drop(out)
+        // # Safety: we don't let borrows escape the current thread
+        std::mem::replace(unsafe { &mut *out.get() }, OutputSource(output))
+            .0
+            .into_inner()
+            .unwrap_or_else(|_| panic!("could not flush the old output"))
     })
 }
 
@@ -331,12 +432,17 @@ pub fn set_input(input: impl Read + 'static) {
 }
 
 pub fn set_input_buffered(input: impl BufRead + 'static) {
-    INPUT_SOURCE.with(|r#in| {
-        // we don't let borrows escape the current thread, not the func
+    replace_input_buffered(input);
+}
 
-        let input = std::mem::replace(unsafe { &mut *r#in.get() }, InputSource(Box::new(input)));
-        // make sure its dropped after to avoid some weird deadlock
-        drop(input)
+pub fn replace_input(input: impl Read + 'static) -> Box<dyn BufRead> {
+    replace_input_buffered(BufReader::new(input))
+}
+
+pub fn replace_input_buffered(input: impl BufRead + 'static) -> Box<dyn BufRead> {
+    INPUT_SOURCE.with(|r#in| {
+        // # Safety: we don't let borrows escape the current thread
+        std::mem::replace(unsafe { &mut *r#in.get() }, InputSource(Box::new(input))).0
     })
 }
 
@@ -358,12 +464,12 @@ macro_rules! file_io {
         $(out: $out_file: literal $(,)?)?
     ) => {{
         $($crate::set_input (::std::fs::File::open  ($in_file ).unwrap());)?
-        $($crate::set_output(::std::fs::File::create($out_file).unwrap());)?
+        $($crate:set_outputt(::std::fs::File::create($out_file).unwrap());)?
     }};
     (
         $(out: $out_file: literal $(,)?)?
         $(in : $in_file : literal $(,)?)?
-    ) => {$crate::file_io!(in: $in_file, out: $out_file)};
+    ) => {file_io!(in: $in_file, out: $out_file)};
 }
 
 #[macro_export]
@@ -381,43 +487,43 @@ macro_rules! parse {
 }
 
 #[macro_export]
-macro_rules! read {
+macro_rules! input {
     (    ) => { $crate::with_token_reader(|r| r.next_token()).expect("Ran out of input") };
     (line) => { $crate::with_token_reader(|r| r.next_line ()).expect("Ran out of input") };
-    ($t:ty) => { $crate::parse!(read!(), $t) };
-    ($($t:ty),+ $(,)?) => { ($($crate::read!($t)),+,) };
+    ($t:ty) => { parse!(input!(), $t) };
+    ($($t:ty),+ $(,)?) => { ($(input!($t)),+,) };
 
     [r!($($t:tt)*); $n:expr; Iterator] => {
-        (0..({$n} as usize)).map(|_| read!($($t)*))
+        (0..({$n} as usize)).map(|_| input!($($t)*))
     };
     [$t:ty; $n:expr; Iterator] => {
-        read![r!($t); $n; Iterator]
+        input![r!($t); $n; Iterator]
     };
 
     [r!($($t:tt)*); $n:expr; Array; Map($map: expr)] => {{
         #[allow(unused_mut)]
         let mut map = ($map);
-        ::std::array::from_fn::<_, {$n as usize}, _>(|_| map($crate::read!($($t)*)))
+        ::std::array::from_fn::<_, {$n as usize}, _>(|_| map(input!($($t)*)))
     }};
-    [r!($($t:tt)*); $n:expr; Array] => { $crate::read!(r!($($t)*); $n; Array; Map(|x| x)) };
-    [$t:ty; $n:expr; Array]     => { $crate::read!(r!($t); $n; Array) };
-    [r!($($t:tt)*); $n:literal] => { $crate::read![r!($($t)*); $n; Array] };
-    [$t:ty; $n:literal] => { $crate::read![r!($t); $n] };
+    [r!($($t:tt)*); $n:expr; Array] => { input!(r!($($t)*); $n; Array; Map(|x| x)) };
+    [$t:ty; $n:expr; Array]     => { input!(r!($t); $n; Array) };
+    [r!($($t:tt)*); $n:literal] => { input![r!($($t)*); $n; Array] };
+    [$t:ty; $n:literal] => { input![r!($t); $n] };
 
     [r!($($t:tt)*); $n:expr; $container: ident; Map($map: expr)] => {
-        read![r!($($t)*); $n; Iterator]
+        input![r!($($t)*); $n; Iterator]
             .map($map)
             .collect::<$container<_>>()
     };
     [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {
-        $crate::read!(r!($t); $n; $container; Map($map))
+        input!(r!($t); $n; $container; Map($map))
     };
 
-    [r!($($t:tt)*); $n:expr; $container: ident] => { $crate::read!(r!($($t)*); $n; $container; Map(|x| x)) };
-    [     $t:ty   ; $n:expr; $container: ident] => { $crate::read!(r!(  $t  ); $n; $container) };
+    [r!($($t:tt)*); $n:expr; $container: ident] => { input!(r!($($t)*); $n; $container; Map(|x| x)) };
+    [     $t:ty   ; $n:expr; $container: ident] => { input!(r!(  $t  ); $n; $container) };
 
-    [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; $crate::read![r!($($t)*); $n; Box] }};
-    [     $t:ty   ; $n:expr] => { $crate::read![r!($t); $n; Vec] };
+    [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; read![r!($($t)*); $n; Box] }};
+    [     $t:ty   ; $n:expr] => { input![r!($t); $n; Vec] };
 }
 
 #[doc(hidden)]
@@ -456,7 +562,7 @@ pub fn __flush() {
 #[macro_export]
 macro_rules! output {
     (one  $x: expr) => {
-        $crate::output!(iter ::std::iter::once($x))
+        output!(iter {::std::iter::once($x)})
     };
     (iter $x: expr) => {
         $crate::__output(($x).into_iter())
