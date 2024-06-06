@@ -6,10 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+default = []
 heap-array = ["dep:heap-array"]
 
 [dependencies]
-heap-array = { version = "0.1.7", optional = true }
+heap-array = { version = "0.1.8", optional = true }
 
 [build-dependencies]
-proc-macro2 = "1.0.78"
+proc-macro2 = "1.0.85"

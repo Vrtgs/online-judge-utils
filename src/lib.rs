@@ -1,6 +1,6 @@
 use modding_num::Modding;
 use std::borrow::Cow;
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 use std::cmp::Reverse;
 use std::fmt::Display;
 use std::io::Write;
@@ -383,26 +383,28 @@ pub fn capture(f: impl FnOnce() + UnwindSafe) -> Capture {
     }
 }
 
+fn read_line() -> Option<&'static str> {
+    let mut buf = String::new();
+    let 1.. = INPUT_SOURCE.with(|r| {
+        // we don't let borrows escape the current thread, nor the func
+        unsafe { &mut **r.get() }
+            .read_line(&mut buf)
+            .expect("unable to read input to a string")
+    }) else {
+        return None;
+    };
+
+    buf.shrink_to_fit();
+    Some(buf.leak().trim())
+}
+
 thread_local! {
     static INPUT_SOURCE: UnsafeCell<InputSource> =
         UnsafeCell::new(InputSource::default());
 
     static OUTPUT_SOURCE: DroppingOutputSource = DroppingOutputSource::default();
 
-    static TOKEN_READER: UnsafeCell<TokenReader<'static>> = {
-        let mut buf = String::with_capacity(1024 * 1024);
-        INPUT_SOURCE.with(|r| {
-            // we don't let borrows escape the current thread, not the func
-            unsafe {&mut **r.get()}
-                .read_to_string(&mut buf)
-                .expect("unable to read input to a string")
-        });
-
-        buf.shrink_to_fit();
-        UnsafeCell::new(TokenReader {
-            data: buf.leak()
-        })
-    }
+    static CURRENT_TOKENS: Cell<&'static str> = Cell::new(read_line().unwrap_or(""));
 }
 
 pub fn set_output(output: impl Write + 'static) {
@@ -446,14 +448,46 @@ pub fn replace_input_buffered(input: impl BufRead + 'static) -> Box<dyn BufRead>
     })
 }
 
-/// This is the only safe way to get a reference to TOKEN_READER
+/// This is the only correct way to get a reference to a TokenReader
 #[doc(hidden)]
 pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -> T {
-    TOKEN_READER.with(move |r_ptr| {
-        // Safety:
-        // we never let the initial reference of &mut TokenReader escape
-        let r = unsafe { &mut *r_ptr.get() };
-        fun(r)
+    CURRENT_TOKENS.with(move |current_tokens| {
+        // the end is already trimmed when reading
+        match current_tokens.get().trim_start() {
+            "" => {
+                while let Some(s) = read_line() {
+                    match s { 
+                        "" => continue,
+                        s => { 
+                            current_tokens.set(s);
+                            break
+                        }
+                    }
+                }
+            }
+            // might as well benefit from trimming the string twice
+            str => current_tokens.set(str),
+        }
+
+        struct ReaderDropGuard<'c, 'a> {
+            reader: TokenReader<'a>,
+            current_tokens: &'c Cell<&'a str>,
+        }
+
+        impl Drop for ReaderDropGuard<'_, '_> {
+            fn drop(&mut self) {
+                self.current_tokens.set(self.reader.data);
+            }
+        }
+
+        let mut guard = ReaderDropGuard {
+            reader: TokenReader {
+                data: current_tokens.get(),
+            },
+            current_tokens,
+        };
+
+        fun(&mut guard.reader)
     })
 }
 
@@ -523,7 +557,7 @@ macro_rules! input {
     [     $t:ty   ; $n:expr; $container: ident] => { input!(r!(  $t  ); $n; $container) };
 
     [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; read![r!($($t)*); $n; Box] }};
-    [     $t:ty   ; $n:expr] => { input![r!($t); $n; Vec] };
+    [     $t:ty   ; $n:expr] => {{ use ::std::boxed::Box; input![r!($t); $n; Box] }};
 }
 
 #[doc(hidden)]
@@ -535,9 +569,9 @@ pub fn __output<I: IntoIterator<Item = D>, D: Display>(iter: I) {
         let out = unsafe { &mut **out.get() };
         let mut iter = iter.into_iter();
         if let Some(first) = iter.next() {
-            write!(out, "{first}").expect(WRITE_ERR_MSG);
+            write!(out, "{}", first).expect(WRITE_ERR_MSG);
             for x in iter {
-                write!(out, " {x}").expect(WRITE_ERR_MSG);
+                write!(out, " {}", x).expect(WRITE_ERR_MSG);
             }
         }
 
@@ -567,6 +601,28 @@ macro_rules! output {
     (iter $x: expr) => {
         $crate::__output(($x).into_iter())
     };
+    (chars $x: expr) => {{
+        let iter = $x;
+
+        // avoid having them in the same scope
+        {
+            use ::core::cell::Cell;
+            use ::core::option::Option;
+            use ::core::iter::Iterator;
+            use ::core::fmt::{Write, Formatter, Result, Display};
+            struct DisplayChars<I>(Cell<Option<I>>);
+
+            impl<I: Iterator<Item=char>> Display for DisplayChars<I> {
+                fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+                    for c in self.0.take().unwrap() {
+                        f.write_char(c)?
+                    }
+                    Ok(())
+                }
+            }
+
+        output!(one DisplayChars(Cell::new(Option::Some(iter))))
+    }}};
 }
 
 #[macro_export]
