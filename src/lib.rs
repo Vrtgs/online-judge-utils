@@ -466,7 +466,7 @@ fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -> T 
                     }
                 }
             }
-            // might as well benefit from trimming the string twice
+            // might as well benefit from trimming the string
             str => current_tokens.set(str),
         }
 
@@ -493,14 +493,14 @@ fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -> T 
 }
 
 pub mod get_input {
-    use super::with_token_reader;
+    use super::{with_token_reader, TokenReader};
     
     pub fn current_line() -> Option<&'static str> {
-        with_token_reader(|r| r.next_line())
+        with_token_reader(TokenReader::next_line)
     }
 
     pub fn next_token() -> Option<&'static str> {
-        with_token_reader(|r| r.next_line())
+        with_token_reader(TokenReader::next_token)
     }
 }
 
