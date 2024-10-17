@@ -10,9 +10,9 @@ checksum = "fbdcdcb6d86f71c5e97409ad45898af11cbc995b4ee8112d59095a28d376c935"
 
 [[package]]
 name = "heap-array"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c41e0c749880fa8e7801c769a9241a6edc46fd37c14a3a43b621ed6df2eb494"
+checksum = "5cf43e2c84b6ba17ac23aa73558fc85a5e429d2a6224210383c4a0c58c1855c2"
 dependencies = [
  "likely_stable",
 ]
@@ -35,7 +35,7 @@ checksum = "523dc4f511e55ab87b694dc30d0f820d60906ef06413f93d4d7a1385599cc149"
 
 [[package]]
 name = "online-judge-utils"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "heap-array",
  "proc-macro2",

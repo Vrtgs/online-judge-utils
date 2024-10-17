@@ -1,6 +1,6 @@
 [package]
 name = "online-judge-utils"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,7 +10,7 @@ default = []
 heap-array = ["dep:heap-array"]
 
 [dependencies]
-heap-array = { version = "0.1.8", optional = true }
+heap-array = { version = "0.1.9", optional = true }
 
 [build-dependencies]
-proc-macro2 = "1.0.85"
+proc-macro2 = "1.0.88"
