@@ -552,7 +552,7 @@ macro_rules! input {
         let mut map = ($map);
         ::std::array::from_fn::<_, {$n as usize}, _>(|_| map(input!($($t)*)))
     }};
-    [r!($($t:tt)*); $n:expr; Array] => { input!(r!($($t)*); $n; Array; Map(|x| x)) };
+    [r!($($t:tt)*); $n:expr; Array] => { input!(r!($($t)*); $n; Array; Map(::std::convert::identity)) };
     [$t:ty; $n:expr; Array]     => { input!(r!($t); $n; Array) };
     [r!($($t:tt)*); $n:literal] => { input![r!($($t)*); $n; Array] };
     [$t:ty; $n:literal] => { input![r!($t); $n] };
@@ -566,7 +566,7 @@ macro_rules! input {
         input![r!($t); $n; $container; Map($map)]
     };
 
-    [r!($($t:tt)*); $n:expr; $container: ident] => { input![r!($($t)*); $n; $container; Map(|x| x)] };
+    [r!($($t:tt)*); $n:expr; $container: ident] => { input![r!($($t)*); $n; $container; Map(::std::convert::identity)] };
     [     $t:ty   ; $n:expr; $container: ident] => { input![r!(  $t  ); $n; $container] };
 
     [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; read![r!($($t)*); $n; Box] }};
