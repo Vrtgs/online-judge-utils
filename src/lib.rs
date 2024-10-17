@@ -528,7 +528,7 @@ macro_rules! input {
     ($($t:ty),+ $(,)?) => { ($(input!($t)),+,) };
 
     [r!($($t:tt)*); $n:expr; Iterator] => {
-        (0..({$n} as usize)).map(|_| input!($($t)*))
+        (0..($n)).map(|_| input!($($t)*))
     };
     [$t:ty; $n:expr; Iterator] => {
         input![r!($t); $n; Iterator]
@@ -550,11 +550,11 @@ macro_rules! input {
             .collect::<$container<_>>()
     };
     [$t:ty; $n:expr; $container: ident; Map($map: expr)] => {
-        input!(r!($t); $n; $container; Map($map))
+        input![r!($t); $n; $container; Map($map)]
     };
 
-    [r!($($t:tt)*); $n:expr; $container: ident] => { input!(r!($($t)*); $n; $container; Map(|x| x)) };
-    [     $t:ty   ; $n:expr; $container: ident] => { input!(r!(  $t  ); $n; $container) };
+    [r!($($t:tt)*); $n:expr; $container: ident] => { input![r!($($t)*); $n; $container; Map(|x| x)] };
+    [     $t:ty   ; $n:expr; $container: ident] => { input![r!(  $t  ); $n; $container] };
 
     [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; read![r!($($t)*); $n; Box] }};
     [     $t:ty   ; $n:expr] => {{ use ::std::boxed::Box; input![r!($t); $n; Box] }};
