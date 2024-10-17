@@ -21,7 +21,7 @@ fn main() {
             .parse::<TokenStream>()
             .unwrap();
 
-        let mini = format!("#[rustfmt::skip] #[cfg(not(feature = \"local-build\"))] #[macro_use] pub mod online_judge_utils {{ {src} }}")
+        let mini = format!("#[rustfmt::skip] #[allow(unexpected_cfgs)] #[cfg(not(feature = \"local-build\"))] #[macro_use] pub mod online_judge_utils {{ {src} }}")
             .replace("$ crate", "online_judge_utils")
             .replace("online_judge_utils :: read", "read")
             .replace("online_judge_utils :: file_io", "file_io")
