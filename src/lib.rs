@@ -449,8 +449,9 @@ pub fn replace_input_buffered(input: impl BufRead + 'static) -> Box<dyn BufRead>
 }
 
 /// This is the only correct way to get a reference to a TokenReader
+/// you can only call TokenReader methods once
 #[doc(hidden)]
-pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -> T {
+fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -> T {
     CURRENT_TOKENS.with(move |current_tokens| {
         // the end is already trimmed when reading
         match current_tokens.get().trim_start() {
@@ -491,6 +492,18 @@ pub fn with_token_reader<F: FnOnce(&mut TokenReader<'static>) -> T, T>(fun: F) -
     })
 }
 
+pub mod get_input {
+    use super::with_token_reader;
+    
+    pub fn current_line() -> Option<&'static str> {
+        with_token_reader(|r| r.next_line())
+    }
+
+    pub fn next_token() -> Option<&'static str> {
+        with_token_reader(|r| r.next_line())
+    }
+}
+
 #[macro_export]
 macro_rules! file_io {
     (
@@ -522,8 +535,8 @@ macro_rules! parse {
 
 #[macro_export]
 macro_rules! input {
-    (    ) => { $crate::with_token_reader(|r| r.next_token()).expect("Ran out of input") };
-    (line) => { $crate::with_token_reader(|r| r.next_line ()).expect("Ran out of input") };
+    (    ) => { $crate::get_input::next_token  ().expect("Ran out of input") };
+    (line) => { $crate::get_input::current_line().expect("Ran out of input") };
     ($t:ty) => { parse!(input!(), $t) };
     ($($t:ty),+ $(,)?) => { ($(input!($t)),+,) };
 
