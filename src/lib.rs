@@ -569,8 +569,14 @@ macro_rules! input {
     [r!($($t:tt)*); $n:expr; $container: ident] => { input![r!($($t)*); $n; $container; Map(::std::convert::identity)] };
     [     $t:ty   ; $n:expr; $container: ident] => { input![r!(  $t  ); $n; $container] };
 
-    [r!($($t:tt)*); $n:expr] => {{ use ::std::boxed::Box; read![r!($($t)*); $n; Box] }};
-    [     $t:ty   ; $n:expr] => {{ use ::std::boxed::Box; input![r!($t); $n; Box] }};
+    [r!($($t:tt)*); $n:expr] => {{ 
+        use ::std::boxed::Box;
+        type BoxSlice<T> = Box<[T]>;
+        
+        let x: Box<[_]> = input![r!($($t)*); $n; BoxSlice];
+        x
+    }};
+    [     $t:ty   ; $n:expr] => {{ input![r!($t); $n] }};
 }
 
 #[doc(hidden)]
