@@ -14,4 +14,4 @@ heap-array = ["dep:heap-array"]
 heap-array = { version = "0.1.9", optional = true }
 
 [build-dependencies]
-proc-macro2 = "1.0.88"
+proc-macro2 = "1.0.93"

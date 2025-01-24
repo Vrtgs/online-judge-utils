@@ -1,6 +1,6 @@
 use modding_num::Modding;
 use std::borrow::Cow;
-use std::cell::{Cell, UnsafeCell};
+use std::cell::Cell;
 use std::cmp::Reverse;
 use std::fmt::Display;
 use std::io::Write;
@@ -9,57 +9,6 @@ use std::num::{Saturating, Wrapping};
 use std::ops::{Deref, DerefMut, Not};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-
-pub mod bumpy {
-    use std::alloc::{GlobalAlloc, Layout};
-    use std::cell::UnsafeCell;
-    use std::mem::MaybeUninit;
-    use std::ptr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    pub struct Bumpy<const LEN: usize> {
-        curr: AtomicUsize,
-        arena: UnsafeCell<[MaybeUninit<u8>; LEN]>,
-    }
-
-    unsafe impl<const LEN: usize> Send for Bumpy<LEN> {}
-    unsafe impl<const LEN: usize> Sync for Bumpy<LEN> {}
-
-    impl<const LEN: usize> Bumpy<LEN> {
-        pub const fn empty() -> Self {
-            Self {
-                curr: AtomicUsize::new(0),
-                arena: UnsafeCell::new(
-                    // [MaybeUninit<u8>; LEN] is safe ot not be init
-                    unsafe { MaybeUninit::uninit().assume_init() },
-                ),
-            }
-        }
-    }
-
-    unsafe impl<const LEN: usize> GlobalAlloc for Bumpy<LEN> {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let alloc_len = (layout.size() + layout.align()) - 1;
-            let curr = self.curr.fetch_add(alloc_len, Ordering::Relaxed);
-
-            if (curr + alloc_len) >= LEN {
-                return ptr::null_mut();
-            }
-
-            let ptr = self.arena.get().cast::<u8>().add(curr);
-            let offset = ptr.align_offset(layout.align());
-
-            if offset >= layout.align() {
-                return ptr::null_mut();
-            }
-
-            ptr.add(offset)
-        }
-
-        #[inline(always)]
-        unsafe fn dealloc(&self, _: *mut u8, _: Layout) {}
-    }
-}
 
 pub mod modding_num;
 pub mod rng;
@@ -269,10 +218,10 @@ impl DerefMut for OutputSource {
 }
 
 #[derive(Default)]
-struct DroppingOutputSource(UnsafeCell<OutputSource>);
+struct DroppingOutputSource(RefCell<OutputSource>);
 
 impl Deref for DroppingOutputSource {
-    type Target = UnsafeCell<OutputSource>;
+    type Target = RefCell<OutputSource>;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -383,24 +332,37 @@ pub fn capture(f: impl FnOnce() + UnwindSafe) -> Capture {
     }
 }
 
+thread_local! {
+    static INTERACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+
 fn read_line() -> Option<&'static str> {
     let mut buf = String::new();
     let 1.. = INPUT_SOURCE.with(|r| {
         // we don't let borrows escape the current thread, nor the func
-        unsafe { &mut **r.get() }
-            .read_line(&mut buf)
-            .expect("unable to read input to a string")
+        let mut r = r.borrow_mut();
+        let res = match INTERACTIVE.get() {
+            true => r.read_line(&mut buf),
+            false => r.read_to_string(&mut buf)
+        };
+        
+        res.expect("unable to read input to a string")
     }) else {
         return None;
     };
 
-    buf.shrink_to_fit();
-    Some(buf.leak().trim())
+    Some(Box::leak(Box::<str>::from(buf.trim())))
+}
+
+#[doc(hidden)]
+pub fn __set_interactive() {
+    INTERACTIVE.set(true)
 }
 
 thread_local! {
-    static INPUT_SOURCE: UnsafeCell<InputSource> =
-        UnsafeCell::new(InputSource::default());
+    static INPUT_SOURCE: RefCell<InputSource> =
+        RefCell::new(InputSource::default());
 
     static OUTPUT_SOURCE: DroppingOutputSource = DroppingOutputSource::default();
 
@@ -422,7 +384,7 @@ pub fn replace_output(output: impl Write + 'static) -> Box<dyn Write> {
 pub fn replace_output_buffered(output: BufWriter<Box<dyn Write>>) -> Box<dyn Write> {
     OUTPUT_SOURCE.with(|out| {
         // # Safety: we don't let borrows escape the current thread
-        std::mem::replace(unsafe { &mut *out.get() }, OutputSource(output))
+        std::mem::replace(&mut *out.borrow_mut(), OutputSource(output))
             .0
             .into_inner()
             .unwrap_or_else(|_| panic!("could not flush the old output"))
@@ -444,7 +406,7 @@ pub fn replace_input(input: impl Read + 'static) -> Box<dyn BufRead> {
 pub fn replace_input_buffered(input: impl BufRead + 'static) -> Box<dyn BufRead> {
     INPUT_SOURCE.with(|r#in| {
         // # Safety: we don't let borrows escape the current thread
-        std::mem::replace(unsafe { &mut *r#in.get() }, InputSource(Box::new(input))).0
+        std::mem::replace(&mut *r#in.borrow_mut(), InputSource(Box::new(input))).0
     })
 }
 
@@ -534,6 +496,11 @@ macro_rules! parse {
 }
 
 #[macro_export]
+macro_rules! interactive_mode {
+    () => { let () = $crate::__set_interactive() };
+}
+
+#[macro_export]
 macro_rules! input {
     (    ) => { $crate::get_input::next_token  ().expect("Ran out of input") };
     (line) => { $crate::get_input::current_line().expect("Ran out of input") };
@@ -585,7 +552,7 @@ pub fn __output<I: IntoIterator<Item = D>, D: Display>(iter: I) {
 
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
-        let out = unsafe { &mut **out.get() };
+        let out = &mut **out.borrow_mut();
         let mut iter = iter.into_iter();
         if let Some(first) = iter.next() {
             write!(out, "{}", first).expect(WRITE_ERR_MSG);
@@ -606,7 +573,8 @@ pub fn __output<I: IntoIterator<Item = D>, D: Display>(iter: I) {
 pub fn __flush() {
     OUTPUT_SOURCE.with(|out| {
         // we don't let borrows escape the current thread, not the func
-        unsafe { &mut **out.get() }
+        out
+            .borrow_mut()
             .flush()
             .expect("unable to flush stdout");
     })
