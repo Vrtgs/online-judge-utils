@@ -286,11 +286,17 @@ impl Write for OutputInner {
     }
 }
 
-pub struct Capture(Result<Vec<u8>, Cow<'static, str>>, Box<dyn Write>);
+#[derive(Debug)]
+pub struct PoisonedOutput {
+    pub panic: Cow<'static, str>,
+    pub output: Vec<u8>
+}
+
+pub struct Capture(Result<Vec<u8>, PoisonedOutput>, Box<dyn Write>);
 
 impl Capture {
     pub fn flush(self) -> io::Result<()> {
-        let data = self.0.as_ref().map_or_else(|e| e.as_bytes(), |x| &**x);
+        let data = self.0.as_ref().map_or_else(|e| &*e.output, |x| &**x);
         let mut writer = BufWriter::new(self.1);
         let res = writer.write_all(data);
         set_output_buffered(writer);
@@ -305,7 +311,7 @@ impl Capture {
         replace_output(BufWriter::new(self.1))
     }
 
-    pub fn into_inner(self) -> Result<Vec<u8>, Cow<'static, str>> {
+    pub fn into_inner(self) -> Result<Vec<u8>, PoisonedOutput> {
         self.0
     }
 }
@@ -326,7 +332,11 @@ pub fn capture(f: impl FnOnce() + UnwindSafe) -> Capture {
         Ok(()) => output.capture(),
         Err(e) => {
             let mut capture = output.capture();
-            capture.0 = Err(e);
+            let err = PoisonedOutput {
+                panic: e,
+                output: capture.0.unwrap()
+            };
+            capture.0 = Err(err);
             capture
         }
     }
