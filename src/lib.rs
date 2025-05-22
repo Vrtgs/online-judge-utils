@@ -483,7 +483,7 @@ macro_rules! file_io {
         $(out: $out_file: literal $(,)?)?
     ) => {{
         $($crate::set_input (::std::fs::File::open  ($in_file ).unwrap());)?
-        $($crate:set_outputt(::std::fs::File::create($out_file).unwrap());)?
+        $($crate:set_output(::std::fs::File::create($out_file).unwrap());)?
     }};
     (
         $(out: $out_file: literal $(,)?)?
